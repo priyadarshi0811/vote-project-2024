@@ -1,0 +1,88 @@
+pipeline {
+    agent any
+    environment {
+        SONAR_HM = tool "sonar"
+    }
+    stages {
+        stage('Code Clone from GitHub: Step-1') {
+            steps {
+                echo 'Cloning code from GitHub'
+                git url: 'https://github.com/priyadarshi0811/vote-project-2024.git', branch: 'Devops'
+            }
+        }
+        stage('SonarQube Analysis: Step-2') {
+            steps {
+                withSonarQubeEnv("sonar") {
+                    sh "$SONAR_HM/bin/sonar-scanner -Dsonar.projectName=Wanderlust -Dsonar.projectKey=Wanderlust -X"
+                    echo 'SonarQube Analysis Done'
+                }
+            }
+        }
+        stage('Sonar Quality Gates: Step-3') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
+                echo 'Quality Gates of Code Completed.'
+            }
+        }
+        stage('OWASP: Step-4') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./', odcInstallation: 'OWASP'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                echo 'OWASP Dependency check completed.'
+            }
+        }
+        stage('Code Build and Test: Step-5') {
+            steps {
+                echo 'Building Docker image'
+                sh 'docker build -t vote:v1 ./vote'
+                echo 'voting Docker image build done.'
+                sh 'docker build -t worker:v2 ./worker'
+                echo 'worker Docker image build done.'
+                sh 'docker build -t result:v3 ./result'
+                echo 'result docker image build'
+            }
+        }
+        stage('Trivy Image Scan: Step-6') {
+            steps {
+                sh 'trivy image vote:v1'
+                sh 'trivy image worker:v2'
+                sh 'trivy image result:v3'
+                echo 'Images Scan Completed.'
+            }
+        }
+        stage('Image Push to Docker Hub: Step-7') {
+            steps {
+                 withCredentials([usernamePassword(
+                    credentialsId: 'DockerCred',
+                    passwordVariable: 'DockerHubpass',
+                    usernameVariable: 'DockerHubUser'
+                )]) {
+                    echo 'Logging in to Docker Hub'
+                    sh 'docker login -u ${DockerHubUser} -p ${DockerHubpass}'
+                    echo 'Tagging voting Docker image'
+                    sh 'docker tag vote:v1 ${DockerHubUser}/voting-app-2024:voting'
+                    echo 'Pushing Backend Docker image to Docker Hub'
+                    sh 'docker push ${DockerHubUser}/voting-app-2024:voting'
+                    echo 'Tagging worker Docker image'
+                    sh 'docker tag worker:v2 ${DockerHubUser}/voting-app-2024:worker'
+                    echo 'Pushing Frontend Docker image to Docker Hub'
+                    sh 'docker push ${DockerHubUser}/voting-app-2024:worker'
+                    echo 'Tagging result Docker image'
+                    sh 'docker tag result:v3 ${DockerHubUser}/voting-app-2024:result'
+                    echo 'Pushing result Docker image to Docker Hub'
+                    sh 'docker push ${DockerHubUser}/voting-app-2024:result'
+                    echo 'Voting, worker, and result Docker images pushed to DockerHub successfully!'
+                }
+            }
+        }
+        stage('Deploy with Docker Compose: Step-8') {
+            steps {
+                echo 'Deploying with Docker Compose'
+                sh 'docker-compose down'
+                sh 'docker-compose up -d'
+            }
+        }
+    }
+}
